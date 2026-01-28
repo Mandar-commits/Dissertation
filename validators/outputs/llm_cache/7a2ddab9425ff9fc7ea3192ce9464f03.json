@@ -1,0 +1,22 @@
+{
+  "name": "Tejaswini Salunkhe",
+  "email": "tejaswinisalunkhe061299@gmail.com",
+  "phone": null,
+  "current_role": "services.",
+  "total_years_experience": null,
+  "skills": ["Django", "Power Bi", "HTML", "CSS"],
+  "education": [
+    "Higher Secondary Education(12th)",
+    "Sardar Dastur Hormazdiar Jr. College",
+    "Percentage - 70.46%",
+    "Higher Secondary Education(10th)",
+    "St. Mira's Secondary School",
+    "Percentage- 86.80%"
+  ],
+  "projects": [
+    "addition and removal of items, and the generation of bills.",
+    "Final Year Project: Traﬃc sign recognition system using Python and CNN.",
+    "NFT-marketplace project: data analysis, model building, and training for price and volume prediction using LSTM model."
+  ],
+  "certifications": []
+}
