@@ -9,146 +9,105 @@ setup_logging()
 
 from core.ingestion import ingest_resume
 from core.llm_extractor import LLMEntityExtractor
-from core.section_pipeline import process_resume
-from core.matcher import ResumeJDMatcher
-from core.ranker import CandidateRanker
-from core.interviewer_allocator import InterviewerAllocator
-from utils.feedback_generator import generate_feedback
+from core.batch_ranker import rank_resume_against_jd
 from utils.exporter import export_json, export_csv
 
-st.set_page_config(page_title="AI Recruitment System", layout="wide")
+st.set_page_config(page_title="AI Recruitment System")
+st.title("AI Recruitment System - Batch Resume Ranking (JD-Aware)")
 
-st.title("AI Recruitment System (Local LLM)")
+# State
+if "ranked_results" not in st.session_state:
+    st.session_state.ranked_results = None
 
-tab1, tab2, tab3, tab4 = st.tabs(
-    ["Resume Upload", "JD Upload", "Results", "Admin Debug"]
+# JD Upload
+st.header("Upload Job Description")
+
+jd_file = st.file_uploader(
+    "Upload Job Description (PDF/DOCX)",
+    type=["pdf", "docx"],
+    key="JD"
 )
 
-resume_text = None
-jd_text = None
-entities = None
-similarity = None
-rank_score = None
-feedback = None
-assignments = None
+jd_entities = None
+extractor = LLMEntityExtractor()
 
-# Resume Upload
-with tab1:
-    st.subheader("Upload Resume (PDF/DOC)")
-    resume_file = st.file_uploader(
-        "Upload Resume", type=["pdf", "docx"], key="resume"
-    )
+if jd_file:
+    with st.spinner("Extracting JD...."):
+        jd_text = ingest_resume(jd_file)
+        jd_entities = extractor.extract(jd_text)
 
-    if resume_file:
-        with st.spinner("Extracting resume text... "):
-            resume_text = ingest_resume(resume_file)
-        st.success("Resume text extracted successfully")
-        st.text_area("Resume Text (Preview)", resume_text[:3000], height=250)
+    st.success("Job Description processed successfully")
+    st.json(jd_entities.to_dict())
 
 
-# Job Description Upload
-with tab2:
-    st.subheader("Upload Job Description (PDF/DOCX)")
-    jd_file = st.file_uploader(
-        "Upload Job Description", type=["pdf", "docx"], key="jd"
-    )
+# Resume Upload Multiple Files
+st.header("Upload Resumes")
 
-    if jd_file:
-        with st.spinner("Extracting JD text"):
-            jd_text = ingest_resume(jd_file)
-        st.success("Job Description text extracted successfully")
-        st.text_area("JD Text (Preview)", jd_text[:3000], height=250)
+resume_files = st.file_uploader(
+    "Upload one or more resumes",
+    type=["pdf", "docx"],
+    accept_multiple_files=True,
+    key="Resumes"
+)
 
-# Pipeline Execution
-if resume_text and jd_text:
-    extractor = LLMEntityExtractor()
-    matcher = ResumeJDMatcher()
-    ranker = CandidateRanker()
-    allocator = InterviewerAllocator()
 
-    with st.spinner("Running AI recruitment pipeline..."):
-        entities = process_resume(extractor.extract(resume_text))
-        similarity = matcher.compute_similarity(resume_text, jd_text)
-        rank_score = ranker.rank(
-            similarity, len(entities.skills), len(entities.projects)
-        )
-        feedback = generate_feedback(entities, similarity)
+# Run Pipeline
+if jd_entities and resume_files:
+    if st.button("Rank Candidates"):
+        resumes = []
 
-        result = {
-            "name": entities.name,
-            "email": entities.email,
-            "phone": entities.phone,
-            "current_role": entities.current_role,
-            "total_years_experience": entities.total_years_experience,
-            "skills": entities.skills,
-            "education": entities.education,
-            "experience": entities.experience,
-            "projects": entities.projects,
-            "certifications": entities.certifications,
-            "similarity": similarity,
-            "rank_score": rank_score
-        }
+        with st.spinner("Extracting Resumes....."):
+            for file in resume_files:
+                text = ingest_resume(file)
+                entities = extractor.extract(text)
+                resumes.append(entities)
 
-        interviewers = ["Alice", "Bob", "Carol"]
-        assignments = allocator.assign([result], interviewers)
+        with st.spinner("matching & Ranking Candidates...."):
+            ranked_results = rank_resume_against_jd(resumes, jd_entities)
+            st.session_state.ranked_results = ranked_results
+
 
 # Results
-with tab3:
-    if entities:
-        st.subheader("Resume-JD Similarity")
-        st.metric("Similarity Score", round(similarity,3))
+if st.session_state.ranked_results:
+    st.header("Ranked Candidates")
 
-        st.subheader("Final Candidate Rank")
-        st.metric("Rank Score", rank_score)
+    ranked = st.session_state.ranked_results
 
-        st.subheader("Extracted Resume Entities")
-        st.json(entities.to_dict())
+    # Summary Table
+    table_data = []
+    for r in ranked:
+        table_data.append({
+            "Rank": r["rank"],
+            "Name": r["name"],
+            "Score": r["score"],
+            "Matched Skills": ", ".join(r["details"]["matched_skills"]),
+            "Missing Skills": ", ".join(r["details"]["missing_skills"]),
+        })
 
-        st.subheader("Interviewer Assignment")
-        st.json(assignments)
-
-        st.subheader("JD-Aware Feedback")
-        for f in feedback:
-            st.write(".", f)
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            if st.button("Export Result as JSON"):
-                export_json(result)
-                st.success("Exported to outputs/results.json")
-
-        with col2:
-            if st.button("Export Result as CSV"):
-                export_csv(result)
-                st.success("Exported to outputs/results.csv")
-
-    else:
-        st.info("Upload both Resume and Job Description to see results")
+st.dataframe(table_data, use_container_width=True)
 
 
-# Admin Debug Panel
-with tab4:
-    st.subheader("Debug Panel")
+# Detailed View
+st.subheader("Candidate Details")
 
-    if resume_text:
-        st.text_area("Full Resume Text", resume_text, height=250)
+for r in ranked:
+    with st.expander(f"#{r['rank']} - {r['name']} (Score: {r['score']}"):
+        st.json(r)
 
-    if jd_text:
-        st.text_area("Full JD Text", jd_text, height=250)
+# Export
+st.header("Export Results")
 
-    if entities:
-        st.subheader("Raw Entity JSON")
-        st.json(entities.to_dict())
+col1, col2 = st.columns(2)
 
-    if similarity is not None:
-        st.write("Similarity:", similarity)
+with col1:
+    if st.button("Export JSON"):
+        export_json(ranked, "outputs/batch_results.json")
+        st.success("Exported to outputs/batch_results.json")
 
-    if rank_score is not None:
-        st.write("Rank Score:", rank_score)
-
-    if feedback:
-        st.write("Feedback", feedback)
-
-    if assignments:
-        st.write("Assignments:", assignments)
+with col2:
+    if st.button("Export CSV"):
+        export_csv(
+            {r["name"]: r["score"] for r in ranked},
+            "outputs/batch_results.csv"
+        )
+        st.success("Exported to outputs/batch_results.csv")
