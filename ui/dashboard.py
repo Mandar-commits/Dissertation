@@ -2,112 +2,147 @@ import streamlit as st
 
 import sys
 from pathlib import Path
+
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from app.logging_config import setup_logging
 setup_logging()
 
+from domain.entities import ResumeEntities
 from core.ingestion import ingest_resume
 from core.llm_extractor import LLMEntityExtractor
 from core.batch_ranker import rank_resume_against_jd
-from utils.exporter import export_json, export_csv
+from core.interviewer_allocator import InterviewerAllocator
 
 st.set_page_config(page_title="AI Recruitment System")
 st.title("AI Recruitment System - Batch Resume Ranking (JD-Aware)")
 
-# State
-if "ranked_results" not in st.session_state:
-    st.session_state.ranked_results = None
-
-# JD Upload
-st.header("Upload Job Description")
-
-jd_file = st.file_uploader(
-    "Upload Job Description (PDF/DOCX)",
-    type=["pdf", "docx"],
-    key="JD"
-)
-
-jd_entities = None
 extractor = LLMEntityExtractor()
+allocator = InterviewerAllocator()
 
-if jd_file:
-    with st.spinner("Extracting JD...."):
-        jd_text = ingest_resume(jd_file)
-        jd_entities = extractor.extract(jd_text)
+# JD Input Manual or File
 
-    st.success("Job Description processed successfully")
-    st.json(jd_entities.to_dict())
+st.header("Job Description Input")
 
-
-# Resume Upload Multiple Files
-st.header("Upload Resumes")
-
-resume_files = st.file_uploader(
-    "Upload one or more resumes",
-    type=["pdf", "docx"],
-    accept_multiple_files=True,
-    key="Resumes"
+jd_mode = st.radio(
+    "JD Input Mode",
+    ["Manual Entry", "Upload JD File"]
 )
 
+jd_entities  = None
 
-# Run Pipeline
-if jd_entities and resume_files:
-    if st.button("Rank Candidates"):
-        resumes = []
+if jd_mode == "Manual Entry":
+    jd_skills = st.text_input("JD Skills (Comma Separated)")
+    jd_exp = st.number_input("Minimum Years Experience", 1.0, 30.0, 2.0)
 
-        with st.spinner("Extracting Resumes....."):
-            for file in resume_files:
-                text = ingest_resume(file)
-                entities = extractor.extract(text)
-                resumes.append(entities)
+    if st.button("Create JD"):
+        jd_entities = ResumeEntities(
+            skills=[s.strip().lower() for s in jd_skills.split(",") if s.strip()],
+            total_years_experience=jd_exp,
+            current_role="manual_jd"
+        )
+        st.session_state.jd = jd_entities
+        st.success("JD Created")
+else:
+    jd_file = st.file_uploader("Upload JD PDF/DOCX", type=["pdf", "docx"])
 
-        with st.spinner("matching & Ranking Candidates...."):
-            ranked_results = rank_resume_against_jd(resumes, jd_entities)
-            st.session_state.ranked_results = ranked_results
+    if jd_file and st.button("Extract JD"):
+        text = ingest_resume(jd_file)
+        jd_entities = extractor.extract(text)
+        st.session_state.jd = jd_entities
+        st.success("JD extracted")
+
+if "jd" in st.session_state:
+    st.json(st.session_state.jd.to_dict())
+
+# Resume Input - Manual or Files
+
+st.header("Resume Input")
+
+resume_mode = st.radio(
+    "Resume Mode",
+    ["Manual Entry", "Upload Resume Files"]
+)
+
+resumes = []
+
+if resume_mode == "Manual Entry":
+
+    count = st.number_input("Number of Candidates", 1, 20, 1)
+
+    manual_resumes = []
+
+    for i in range(count):
+        st.subheader(f"Candidate {i+1}")
+
+        name = st.text_input(f"Name{i}", key=f"name{i}")
+        skills = st.text_input(f"Skills {i} (comma separated)", key=f"skills{i}")
+        exp = st.number_input(f"Experience {i}", 0.0, 30.0, 1.0, key=f"exp{i}")
+
+        manual_resumes.append(
+            ResumeEntities(
+                name=name,
+                skills=[s.strip().lower() for s in skills.split(",") if s.strip()],
+                total_years_experience=exp
+            )
+        )
+
+    if st.button("Load Manual Candidates"):
+        st.session_state.resumes = manual_resumes
+        st.success("Manual candidates loaded")
+
+else:
+    files = st.file_uploader(
+        "Upload Resumes",
+        type=["pdf", "docx"],
+        accept_multiple_files=True
+    )
+
+    if files and st.button("Extract Resumes"):
+        extracted = []
+        for f in files:
+            text = ingest_resume(f)
+            extracted.append(extractor.extract(text))
+
+        st.session_state.resumes = extracted
+        st.success("Resumes extracted")
+
+# Ranking Button
+
+st.header("Ranking")
+
+if "jd" in st.session_state and "resumes" in st.session_state:
+
+    if st.button("Rank All Candidates"):
+
+        ranked = rank_resume_against_jd(
+            st.session_state.resumes,
+            st.session_state.jd
+        )
+
+        st.session_state.ranked = ranked
 
 
 # Results
-if st.session_state.ranked_results:
-    st.header("Ranked Candidates")
 
-    ranked = st.session_state.ranked_results
+if "ranked" in st.session_state:
+    st.header("Ranked Results")
+    ranked = st.session_state.ranked
 
-    # Summary Table
-    table_data = []
     for r in ranked:
-        table_data.append({
-            "Rank": r["rank"],
-            "Name": r["name"],
-            "Score": r["score"],
-            "Matched Skills": ", ".join(r["details"]["matched_skills"]),
-            "Missing Skills": ", ".join(r["details"]["missing_skills"]),
-        })
-
-st.dataframe(table_data, use_container_width=True)
-
-
-# Detailed View
-st.subheader("Candidate Details")
-
-for r in ranked:
-    with st.expander(f"#{r['rank']} - {r['name']} (Score: {r['score']}"):
-        st.json(r)
-
-# Export
-st.header("Export Results")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    if st.button("Export JSON"):
-        export_json(ranked, "outputs/batch_results.json")
-        st.success("Exported to outputs/batch_results.json")
-
-with col2:
-    if st.button("Export CSV"):
-        export_csv(
-            {r["name"]: r["score"] for r in ranked},
-            "outputs/batch_results.csv"
+        st.write(
+            f"**Rank {r['rank']} - {r['name']} - Score {r['score']}**"
         )
-        st.success("Exported to outputs/batch_results.csv")
+
+        st.write("Matched: ", r["details"]["matched_skills"])
+        st.write("Missing: ", r["details"]["missing_skills"])
+        st.divider()
+
+    # Interviewer Assignment
+    st.header("Interviewer Assignment")
+
+    assignments = allocator.assign_batch(
+        [ResumeEntities(**r["resume"]) for r in ranked]
+    )
+
+    st.json(assignments)
