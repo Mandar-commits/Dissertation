@@ -9,6 +9,19 @@ from core.chunk_selector import ChunkSelector
 
 logger = logging.getLogger(__name__)
 
+def _clean_llm_json(text:str) -> str:
+    text = re.sub(r"```json", "", text, flags=re.I)
+    text = text.replace("```", "")
+
+    start = text.find("{")
+    end = text.find("}")
+
+    if start != -1 and end != -1:
+        text = text[start:end+1]
+
+    return text.strip()
+
+
 class LLMEntityExtractor:
     def __init__(self, model: str = None):
         self.model = model or LOCAL_LLM_MODEL
@@ -29,7 +42,7 @@ class LLMEntityExtractor:
 
         print("\nCalling Sematic LLM")
         semantic_json = retry_with_backoff(
-            lambda : self._call_llm(self._build_semantic_prompt(header, relevant_chunks)),
+            lambda : self._call_llm(self._build_semantic_prompt(relevant_chunks)),
             retries=2,
             delay=2,
         )
@@ -38,7 +51,8 @@ class LLMEntityExtractor:
             raise RuntimeError("LLM returned empty response for sematic fields")
 
         try:
-            semantic_data = json.loads(semantic_json)
+            clean = _clean_llm_json(semantic_json)
+            semantic_data = json.loads(clean)
         except json.JSONDecodeError as e:
             logger.error("Failed to parse LLM JSON")
             logger.error(semantic_json)
@@ -86,29 +100,24 @@ class LLMEntityExtractor:
         }
 
     # Prompt Builder
-    def _build_semantic_prompt(self, header: dict, chunks: list[str]) -> str:
-        joined_chunks = "\n\n".join(f"[SECTION]\n{c}" for c in chunks)
-        print("Joined the Chunks and not returning the Sematic Prompt altogether")
+    def _build_semantic_prompt(self, chunks):
+        joined = "\n".join(chunks)
 
         return f"""
-    You are given:
-    1) Header info already extracted
-    2) Relevant resume sections
+    Return VALID JSON only
     
-    Return VALID JSON ONLY. No markdown. No explanations
+    Extract:
+    skills, education, projects
     
-    Header:
-    {json.dumps(header, indent=2)}
+    Rules:
+    - skills -> max 8
+    - education -> degree only
+    - projects -> title only
     
-    Relevant Sections:
-    {joined_chunks}
-    
-    Extract only these fields:
-    - skills (list of strings)
-    - experience (list of strings)
-    - projects (list of strings)
-    - certifications (list of strings)
+    Text:
+    {joined}
     """.strip()
+
 
     def _call_llm(self, prompt: str) -> str:
         logger.debug("Calling Ollama (hybrid)")
@@ -122,10 +131,8 @@ class LLMEntityExtractor:
                 "stream": False,
                 "options": {
                     "temperature": 0.0,
-                    "num_predict": 250,
-                    "num_ctx": 2048,
+                    "num_predict": 140,
                     "top_p": 0.9,
-                    "stop": ["}\n"]
                 },
             },
             timeout=120,

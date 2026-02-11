@@ -16,28 +16,27 @@ def _ocr_pdf(path):
 
 def ingest_resume(file):
     logger.info("Ingesting Resume")
-    print("Ingesting Resume")
     text = ""
     if isinstance(file, str):
         if file.lower().endswith(".pdf"):
-            print("PDF File Detected")
+            #print("PDF File Detected")
             with open(file, "rb") as f:
                 reader = PyPDF2.PdfReader(f)
                 text = "".join(p.extract_text() or "" for p in reader.pages)
             if len(text.strip()) < 50:
-                print("\nWent for OCR Path\n")
+                #print("\nWent for OCR Path\n")
                 text = _ocr_pdf(file)
         elif file.lower().endswith(".docx"):
-            print("Doc File Detected")
+            #print("Doc File Detected")
             doc = Document(file)
             text = "\n".join(p.text for p in doc.paragraphs)
     else:
-        print("Not Sure what but went to else part")
+        #print("Not Sure what but went to else part")
         suffix = os.path.splitext(file.name)[1]
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(file.read())
             path = tmp.name
         text = ingest_resume(path)
-    print(f"Extracted text length: {len(text)}")
+    #print(f"Extracted text length: {len(text)}")
     logger.debug(f"Extracted text length: {len(text)}")
     return text

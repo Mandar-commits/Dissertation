@@ -2,153 +2,148 @@ import streamlit as st
 
 import sys
 from pathlib import Path
+
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from app.logging_config import setup_logging
 setup_logging()
 
+from domain.entities import ResumeEntities
 from core.ingestion import ingest_resume
-from core.llm_extractor import LLMEntityExtractor
-from core.section_pipeline import process_resume
-from core.matcher import ResumeJDMatcher
-from core.ranker import CandidateRanker
+from core.fast_extractor import UltraFastExtractor
+from core.batch_ranker import rank_resume_against_jd
 from core.interviewer_allocator import InterviewerAllocator
-from utils.feedback_generator import generate_feedback
-from utils.exporter import export_json, export_csv
+from core.parallel_extract import extract_resumes_parallel
 
-st.set_page_config(page_title="AI Recruitment System", layout="wide")
+st.set_page_config(page_title="AI Recruitment System")
+st.title("AI Recruitment System - Batch Resume Ranking (JD-Aware)")
 
-st.title("AI Recruitment System (Local LLM)")
+extractor = UltraFastExtractor()
+allocator = InterviewerAllocator()
 
-tab1, tab2, tab3, tab4 = st.tabs(
-    ["Resume Upload", "JD Upload", "Results", "Admin Debug"]
+# JD Input Manual or File
+
+st.header("Job Description Input")
+
+jd_mode = st.radio(
+    "JD Input Mode",
+    ["Manual Entry", "Upload JD File"]
 )
 
-resume_text = None
-jd_text = None
-entities = None
-similarity = None
-rank_score = None
-feedback = None
-assignments = None
+jd_entities  = None
 
-# Resume Upload
-with tab1:
-    st.subheader("Upload Resume (PDF/DOC)")
-    resume_file = st.file_uploader(
-        "Upload Resume", type=["pdf", "docx"], key="resume"
-    )
+if jd_mode == "Manual Entry":
+    jd_skills = st.text_input("JD Skills (Comma Separated)")
+    jd_exp = st.number_input("Minimum Years Experience", 1.0, 30.0, 2.0)
 
-    if resume_file:
-        with st.spinner("Extracting resume text... "):
-            resume_text = ingest_resume(resume_file)
-        st.success("Resume text extracted successfully")
-        st.text_area("Resume Text (Preview)", resume_text[:3000], height=250)
-
-
-# Job Description Upload
-with tab2:
-    st.subheader("Upload Job Description (PDF/DOCX)")
-    jd_file = st.file_uploader(
-        "Upload Job Description", type=["pdf", "docx"], key="jd"
-    )
-
-    if jd_file:
-        with st.spinner("Extracting JD text"):
-            jd_text = ingest_resume(jd_file)
-        st.success("Job Description text extracted successfully")
-        st.text_area("JD Text (Preview)", jd_text[:3000], height=250)
-
-# Pipeline Execution
-if resume_text and jd_text:
-    extractor = LLMEntityExtractor()
-    matcher = ResumeJDMatcher()
-    ranker = CandidateRanker()
-    allocator = InterviewerAllocator()
-
-    with st.spinner("Running AI recruitment pipeline..."):
-        entities = process_resume(extractor.extract(resume_text))
-        similarity = matcher.compute_similarity(resume_text, jd_text)
-        rank_score = ranker.rank(
-            similarity, len(entities.skills), len(entities.projects)
+    if st.button("Create JD"):
+        jd_entities = ResumeEntities(
+            skills=[s.strip().lower() for s in jd_skills.split(",") if s.strip()],
+            total_years_experience=jd_exp,
+            current_role="manual_jd"
         )
-        feedback = generate_feedback(entities, similarity)
+        st.session_state.jd = jd_entities
+        st.success("JD Created")
+else:
+    jd_file = st.file_uploader("Upload JD PDF/DOCX", type=["pdf", "docx"])
 
-        result = {
-            "name": entities.name,
-            "email": entities.email,
-            "phone": entities.phone,
-            "current_role": entities.current_role,
-            "total_years_experience": entities.total_years_experience,
-            "skills": entities.skills,
-            "education": entities.education,
-            "experience": entities.experience,
-            "projects": entities.projects,
-            "certifications": entities.certifications,
-            "similarity": similarity,
-            "rank_score": rank_score
-        }
+    if jd_file and st.button("Extract JD"):
+        text = ingest_resume(jd_file)
+        jd_entities = extractor.extract(text)
+        st.session_state.jd = jd_entities
+        st.success("JD extracted")
 
-        interviewers = ["Alice", "Bob", "Carol"]
-        assignments = allocator.assign([result], interviewers)
+if "jd" in st.session_state:
+    st.json(st.session_state.jd.to_dict())
+
+# Resume Input - Manual or Files
+
+st.header("Resume Input")
+
+resume_mode = st.radio(
+    "Resume Mode",
+    ["Manual Entry", "Upload Resume Files"]
+)
+
+resumes = []
+
+if resume_mode == "Manual Entry":
+
+    count = st.number_input("Number of Candidates", 1, 20, 1)
+
+    manual_resumes = []
+
+    for i in range(count):
+        st.subheader(f"Candidate {i+1}")
+
+        name = st.text_input(f"Name{i}", key=f"name{i}")
+        skills = st.text_input(f"Skills {i} (comma separated)", key=f"skills{i}")
+        exp = st.number_input(f"Experience {i}", 0.0, 30.0, 1.0, key=f"exp{i}")
+
+        manual_resumes.append(
+            ResumeEntities(
+                name=name,
+                skills=[s.strip().lower() for s in skills.split(",") if s.strip()],
+                total_years_experience=exp
+            )
+        )
+
+    if st.button("Load Manual Candidates"):
+        st.session_state.resumes = manual_resumes
+        st.success("Manual candidates loaded")
+
+else:
+    files = st.file_uploader(
+        "Upload Resumes",
+        type=["pdf", "docx"],
+        accept_multiple_files=True
+    )
+
+    if files and st.button("Extract Resumes"):
+        extracted = []
+        for f in files:
+            text = ingest_resume(f)
+            extracted.append(extractor.extract(text))
+
+        st.session_state.resumes = extracted
+        st.success("Resumes extracted")
+
+# Ranking Button
+
+st.header("Ranking")
+
+if "jd" in st.session_state and "resumes" in st.session_state:
+
+    if st.button("Rank All Candidates"):
+
+        ranked = rank_resume_against_jd(
+            st.session_state.resumes,
+            st.session_state.jd
+        )
+
+        st.session_state.ranked = ranked
+
 
 # Results
-with tab3:
-    if entities:
-        st.subheader("Resume-JD Similarity")
-        st.metric("Similarity Score", round(similarity,3))
 
-        st.subheader("Final Candidate Rank")
-        st.metric("Rank Score", rank_score)
+if "ranked" in st.session_state:
+    st.header("Ranked Results")
+    ranked = st.session_state.ranked
 
-        st.subheader("Extracted Resume Entities")
-        st.json(entities.to_dict())
+    for r in ranked:
+        st.write(
+            f"**Rank {r['rank']} - {r['name']} - Score {r['score']}**"
+        )
 
-        st.subheader("Interviewer Assignment")
-        st.json(assignments)
+        st.write("Matched: ", r["details"]["matched_skills"])
+        st.write("Missing: ", r["details"]["missing_skills"])
+        st.divider()
 
-        st.subheader("JD-Aware Feedback")
-        for f in feedback:
-            st.write(".", f)
+    # Interviewer Assignment
+    st.header("Interviewer Assignment")
 
-        col1, col2 = st.columns(2)
+    assignments = allocator.assign_batch(
+        [ResumeEntities(**r["resume"]) for r in ranked]
+    )
 
-        with col1:
-            if st.button("Export Result as JSON"):
-                export_json(result)
-                st.success("Exported to outputs/results.json")
-
-        with col2:
-            if st.button("Export Result as CSV"):
-                export_csv(result)
-                st.success("Exported to outputs/results.csv")
-
-    else:
-        st.info("Upload both Resume and Job Description to see results")
-
-
-# Admin Debug Panel
-with tab4:
-    st.subheader("Debug Panel")
-
-    if resume_text:
-        st.text_area("Full Resume Text", resume_text, height=250)
-
-    if jd_text:
-        st.text_area("Full JD Text", jd_text, height=250)
-
-    if entities:
-        st.subheader("Raw Entity JSON")
-        st.json(entities.to_dict())
-
-    if similarity is not None:
-        st.write("Similarity:", similarity)
-
-    if rank_score is not None:
-        st.write("Rank Score:", rank_score)
-
-    if feedback:
-        st.write("Feedback", feedback)
-
-    if assignments:
-        st.write("Assignments:", assignments)
+    st.json(assignments)
