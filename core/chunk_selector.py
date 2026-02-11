@@ -32,8 +32,10 @@ class ChunkSelector:
         selected = []
         for qv in query_vecs:
             sims = cosine_similarity([qv], chunk_vecs)[0]
-            idx = int(np.argmax(sims))
-            selected.append(chunks[idx])
+            top_k = 2
+            idxs = sims.argsort()[-top_k:]
+            for i in idxs:
+                selected.append(chunks[int(i)])
 
         # Deduplicate while preserving order
         seen = set()

@@ -10,14 +10,15 @@ setup_logging()
 
 from domain.entities import ResumeEntities
 from core.ingestion import ingest_resume
-from core.llm_extractor import LLMEntityExtractor
+from core.fast_extractor import UltraFastExtractor
 from core.batch_ranker import rank_resume_against_jd
 from core.interviewer_allocator import InterviewerAllocator
+from core.parallel_extract import extract_resumes_parallel
 
 st.set_page_config(page_title="AI Recruitment System")
 st.title("AI Recruitment System - Batch Resume Ranking (JD-Aware)")
 
-extractor = LLMEntityExtractor()
+extractor = UltraFastExtractor()
 allocator = InterviewerAllocator()
 
 # JD Input Manual or File
