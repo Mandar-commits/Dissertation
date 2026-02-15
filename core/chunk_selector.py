@@ -3,10 +3,27 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
 
 class ChunkSelector:
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
-        self.model = SentenceTransformer(model_name)
+    _model = None
+    _query_vecs = None
 
-    def chunk_text(self, text: str, chunk_size: int = 250):
+    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+        if ChunkSelector._model is None:
+            ChunkSelector._model = SentenceTransformer(model_name)
+
+        self.model = ChunkSelector._model
+
+        if ChunkSelector._query_vecs is None:
+            queries = [
+                "technical skills",
+                "education degree university",
+                "work experience job role",
+                "project portfolio",
+                "certifications"
+            ]
+            ChunkSelector._query_vecs = self.model.encode(queries)
+        self.query_vecs = ChunkSelector._query_vecs
+
+    def chunk_text(self, text: str, chunk_size: int = 120):
         words = text.split()
         chunks = []
         for i in range(0, len(words), chunk_size):
@@ -18,19 +35,10 @@ class ChunkSelector:
         if not chunks:
             return []
 
-        queries = [
-            "technical skills",
-            "education degree university",
-            "work experience job role",
-            "project portfolio",
-            "certifications"
-        ]
-
         chunk_vecs = self.model.encode(chunks, show_progress_bar=False)
-        query_vecs = self.model.encode(queries, show_progress_bar=False)
 
         selected = []
-        for qv in query_vecs:
+        for qv in self.query_vecs:
             sims = cosine_similarity([qv], chunk_vecs)[0]
             top_k = 2
             idxs = sims.argsort()[-top_k:]

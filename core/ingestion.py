@@ -2,8 +2,15 @@ import logging, PyPDF2
 from docx import Document
 from pdf2image import convert_from_path
 import pytesseract, tempfile, os
+import re
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
+
+def clean_text(text):
+    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r'[^a-zA-Z0-9.,;:@()\-+/ ]', '', text)
+    return text.strip()
 
 def _ocr_pdf(path):
     print("Switched to OCR Path")
@@ -37,6 +44,8 @@ def ingest_resume(file):
             tmp.write(file.read())
             path = tmp.name
         text = ingest_resume(path)
+
+    text = clean_text(text)
     #print(f"Extracted text length: {len(text)}")
     logger.debug(f"Extracted text length: {len(text)}")
     return text

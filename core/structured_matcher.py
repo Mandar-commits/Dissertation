@@ -1,54 +1,62 @@
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 
+from core.semantic_matcher import SemanticMatcher
+
+
 class StructuredJDMatcher:
     def __init__(self):
         self.embedder = SentenceTransformer("all-MiniLM-L6-v2")
+        self.semantic = SemanticMatcher()
 
-    def match(self, resume, jd):
+    def match(self, resume, jd, resume_text=None, jd_text=None):
         resume_skills = set(map(str.lower, resume.skills))
         jd_skills = set(map(str.lower, jd.skills))
 
-        if jd_skills:
-            matched = resume_skills & jd_skills
-            skill_score = len(matched) / len(jd_skills)
-        else:
-            skill_score = 1.0
+        matched = resume_skills & jd_skills
+        missing = jd_skills - resume_skills
 
-        # Experience Match
-        if jd.total_years_experience:
-            if resume.total_years_experience:
-                exp_score = min(
-                    resume.total_years_experience / jd.total_years_experience,
-                    1.0
-                )
-            else:
-                exp_score = 0.0
-        else:
-            exp_score = 1.0
+        skill_score = len(matched) / len(jd_skills) if jd_skills else 1
 
+        # Expereience
+        exp_score = 0
+        if jd.total_years_experience and resume.total_years_experience:
 
-        # Role Match
-        if resume.current_role and jd.current_role:
-            r_vec = self.embedder.encode([resume.current_role])
-            j_vec = self.embedder.encode([jd.current_role])
-            role_score = cosine_similarity(r_vec, j_vec)[0][0]
-        else:
-            role_score = 0.5
+            exp_score = min(
+                resume.total_years_experience /
+                jd.total_years_experience,
+                1.0
+            )
+
+        # Semantic Similarity
+        semantic_score = 0
+        if resume_text and jd_text:
+            semantic_score = self.semantic.compute(
+                resume_text, jd_text
+            )
 
         # Final Score
         final_score = (
-            0.55 * skill_score +
+            0.40 * skill_score +
             0.30 * exp_score +
-            0.15 * role_score
+            0.30 * semantic_score
         )
 
         return {
             "final_score": round(final_score, 3),
-            "skill_score": round(skill_score, 3),
-            "experience_score": round(exp_score, 3),
-            "role_score": round(role_score, 3),
-            "matched_skills": list(matched) if jd_skills else [],
-            "missing_skills": list(jd_skills - resume_skills),
-        }
 
+            "score_breakdown": {
+
+                "skill_score": round(skill_score, 3),
+                "experience_score": round(exp_score, 3),
+                "semantic_score": round(semantic_score, 3),
+            },
+
+            "matched_skills": list(matched),
+            "missing_skills": list(missing),
+
+            "confidence": round(
+                (skill_score + semantic_score)/2,
+                3
+            )
+        }
