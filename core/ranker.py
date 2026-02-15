@@ -23,5 +23,17 @@ class CandidateRanker:
         for idx, r in enumerate(ranked, start=1):
             r["rank"] = idx
 
+            r["explanation"] = self.generate_explanation(
+                r["details"]
+            )
+
         return ranked
+
+    def generate_explanation(self, details):
+        return {
+            "matched_skills": details["matched_skills"],
+            "missing_skills": details["missing_skills"],
+            "score_breakdown": details["score_breakdown"],
+            "confidence": details["confidence"]
+        }
 
